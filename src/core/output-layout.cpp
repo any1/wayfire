@@ -968,13 +968,6 @@ class output_layout_t::impl
         wlr_output_configuration_head_v1 *head;
         wl_list_for_each(head, &configuration->heads, link)
         {
-            if (!this->outputs.count(head->state.output))
-            {
-                LOGE("Output configuration request contains unknown",
-                    " output, probably a compositor bug!");
-                continue;
-            }
-
             auto& handle = head->state.output;
             auto& state  = result[handle];
 
@@ -1016,7 +1009,11 @@ class output_layout_t::impl
             // Notify outputs that they have external configuration
             for (auto& [wo, _] : configuration)
             {
-                this->outputs[wo]->is_externally_managed = true;
+                auto it = this->outputs.find(wo);
+                if (it == this->outputs.end()) {
+                    continue;
+                }
+                it->second->is_externally_managed = true;
             }
 
             wlr_output_configuration_v1_send_succeeded(wlr_configuration);
@@ -1291,7 +1288,8 @@ class output_layout_t::impl
     /** Check whether the given configuration can be applied */
     bool test_configuration(const output_configuration_t& config)
     {
-        if (config.size() != this->outputs.size())
+        auto n_outputs = this->outputs.empty() ? 1 : this->outputs.size();
+        if (config.size() != n_outputs)
         {
             return false;
         }
@@ -1299,12 +1297,12 @@ class output_layout_t::impl
         bool ok = true;
         for (auto& entry : config)
         {
-            if (this->outputs.count(entry.first) == 0)
-            {
-                return false;
+            if (this->outputs.count(entry.first) != 0) {
+                ok &= this->outputs[entry.first]->test_state(entry.second);
+            } else if (this->outputs.empty() && noop_output &&
+                    noop_output->handle == entry.first) {
+                ok &= this->noop_output->test_state(entry.second);
             }
-
-            ok &= this->outputs[entry.first]->test_state(entry.second);
         }
 
         /* Check overlapping outputs */
@@ -1372,7 +1370,11 @@ class output_layout_t::impl
         {
             auto& handle = entry.first;
             auto& state  = entry.second;
-            auto& lo     = this->outputs[handle];
+            auto it      = this->outputs.find(handle);
+            if (it == this->outputs.end()) {
+                continue;
+            }
+            auto& lo = it->second;
 
             if (!(state.source & OUTPUT_IMAGE_SOURCE_SELF))
             {
@@ -1392,7 +1394,11 @@ class output_layout_t::impl
         {
             auto& handle = entry.first;
             auto& state  = entry.second;
-            auto& lo     = this->outputs[handle];
+            auto it      = this->outputs.find(handle);
+            if (it == this->outputs.end()) {
+                continue;
+            }
+            auto& lo = it->second;
 
             if (state.source & OUTPUT_IMAGE_SOURCE_SELF &&
                 !entry.second.position.is_automatic_position())
@@ -1413,7 +1419,11 @@ class output_layout_t::impl
         for (auto& entry : config)
         {
             auto& handle = entry.first;
-            auto& lo     = this->outputs[handle];
+            auto it      = this->outputs.find(handle);
+            if (it == this->outputs.end()) {
+                continue;
+            }
+            auto& lo = it->second;
             auto state   = entry.second;
             if (state.source & OUTPUT_IMAGE_SOURCE_SELF &&
                 entry.second.position.is_automatic_position())
@@ -1429,7 +1439,11 @@ class output_layout_t::impl
         {
             auto& handle = entry.first;
             auto& state  = entry.second;
-            auto& lo     = this->outputs[handle];
+            auto it      = this->outputs.find(handle);
+            if (it == this->outputs.end()) {
+                continue;
+            }
+            auto& lo = it->second;
 
             if (state.source == OUTPUT_IMAGE_SOURCE_MIRROR)
             {
@@ -1444,12 +1458,27 @@ class output_layout_t::impl
         {
             auto& handle = entry.first;
             auto& state  = entry.second;
-            auto& lo     = this->outputs[handle];
+            auto it      = this->outputs.find(handle);
+            if (it == this->outputs.end()) {
+                continue;
+            }
+            auto& lo = it->second;
 
             if (state.source & OUTPUT_IMAGE_SOURCE_SELF &&
                 entry.second.position.is_automatic_position())
             {
                 lo->emit_configuration_changed(wf::OUTPUT_POSITION_CHANGE);
+            }
+        }
+
+        for (auto& entry : config)
+        {
+            auto& handle = entry.first;
+            auto state   = entry.second;
+
+            if (noop_output && handle == noop_output->handle) {
+                noop_output->apply_state(state);
+                wlr_output_layout_add_auto(output_layout, noop_output->handle);
             }
         }
 
